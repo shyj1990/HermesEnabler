@@ -199,6 +199,9 @@ typedef struct {
     fn_set_cstr set_domain;
     fn_get_one get_one;
     fn_copy_str copy_token;
+    bool (*acquire)(void *, bool, char **);
+    int (*activate)(void *);
+    fn_copy_str get_tok;
     fn_get_path get_path;
     fn_free query_free;
     fn_consume consume;
@@ -235,6 +238,9 @@ static void bq_load_mcm(void) {
     g.set_domain = (fn_set_cstr)bq_sym(g.h, "container_query_operation_set_part_domain", "container_query_set_part_domain");
     g.get_one = (fn_get_one)bq_sym(g.h, "container_query_get_single_result", NULL);
     g.copy_token = (fn_copy_str)bq_sym(g.h, "container_copy_sandbox_token", NULL);
+    g.acquire = (bool (*)(void *, bool, char **))bq_sym(g.h, "container_acquire_sandbox_extension", NULL);
+    g.activate = (int (*)(void *))bq_sym(g.h, "container_object_sandbox_extension_activate", NULL);
+    g.get_tok = (fn_copy_str)bq_sym(g.h, "container_object_get_sandbox_token", NULL);
     g.get_path = (fn_get_path)bq_sym(g.h, "container_object_get_path", NULL);
     g.query_free = (fn_free)bq_sym(g.h, "container_query_free", NULL);
     g.consume = (fn_consume)dlsym(RTLD_DEFAULT, "sandbox_extension_consume");
@@ -377,6 +383,18 @@ static int64_t bq_query_escape(uint64_t cls, NSString *ident, BOOL group,
         if (cp) path = [NSString stringWithUTF8String:cp];
     }
     char *tok = (res && g.copy_token) ? g.copy_token(res) : NULL;
+    if ((!tok || !*tok) && res && g.acquire) {
+        // Older containermanagerd builds do not attach a token to query
+        // results; request one explicitly instead (the classic MCM path).
+        char *t = NULL;
+        bool ok = g.acquire(res, false, &t);
+        if (ok && t && *t) tok = t;
+        else BQLog(@"acquire_sandbox_extension: ok=%d t=%p", ok, (void *)t);
+    }
+    if ((!tok || !*tok) && res && g.get_tok) {
+        char *t = g.get_tok(res);
+        if (t && *t) tok = t;
+    }
     int64_t h = (tok && g.consume) ? g.consume(tok) : -5;
     BQLog(@"strategy %@: cls=%llu ident=%@ part=%llu result=%p path=%@ token=%s consume=%lld",
           label, cls, ident, part, res, path ?: @"(null)", tok ? "YES" : "NO", (long long)h);
@@ -2684,6 +2702,8 @@ NSString *BQDiagnosticsReport(void) {
     [report appendFormat:@"mcm loaded=%d create=%p token=%p domain=%p part=%p flags=%p\n",
         g.h != NULL, (void *)g.create, (void *)g.copy_token,
         (void *)g.set_domain, (void *)g.set_part, (void *)g.set_flags];
+    [report appendFormat:@"mcm acquire=%p activate=%p gettok=%p\n",
+        (void *)g.acquire, (void *)g.activate, (void *)g.get_tok];
     char build[128] = {0};
     size_t buildLength = sizeof(build);
     sysctlbyname("kern.osversion", build, &buildLength, NULL, 0);
