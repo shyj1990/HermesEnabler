@@ -38,7 +38,7 @@ static NSString *gEscapeGroupRoot;
 static int gTraversalState; // 0 unknown, 1 works, -1 unsupported
 static BOOL gClass2ParentEnabled;
 static BOOL gAcquireEnabled;
-static BOOL gAcquireAttempted;
+static BOOL gEscapeSkipRelease;
 static NSString *gClass2SubpathLink;
 static dispatch_queue_t gWorkQueue;
 
@@ -406,11 +406,12 @@ static int64_t bq_query_escape(uint64_t cls, NSString *ident, BOOL group,
     }
     char *tok = (res && g.copy_token) ? g.copy_token(res) : NULL;
     BOOL tokFromCopy = (tok != NULL);
-    if ((!tok || !*tok) && res && g.acquire && gAcquireEnabled && !gAcquireAttempted) {
+    BOOL tokActivated = NO;
+    if ((!tok || !*tok) && res && g.acquire && gAcquireEnabled) {
         // Older containermanagerd builds do not attach a token to query
         // results; request one explicitly instead (the classic MCM path).
-        // Opt-in from Diagnostics. One attempt per process run.
-        gAcquireAttempted = YES;
+        // Opt-in from Diagnostics. Safe to repeat: each call is a fresh XPC
+        // round trip and the daemon issues a fresh single-use token.
         NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
         [defs setBool:YES forKey:@"BQAcquireCrashGuard"];
         [defs synchronize];
@@ -430,7 +431,10 @@ static int64_t bq_query_escape(uint64_t cls, NSString *ident, BOOL group,
             BQLog(@"acquire: get_sandbox_token -> %p", (void *)t2);
             size_t t2len = t2 ? strnlen(t2, 4096) : 0;
             if (t2) BQLog(@"acquire: token len=%zu", t2len);
-            if (t2len > 16) tok = t2; // object-owned; never free()
+            if (t2len > 16) {
+                tok = t2; // object-owned; never free()
+                tokActivated = YES;
+            }
         }
         [defs setBool:NO forKey:@"BQAcquireCrashGuard"];
         [defs synchronize];
@@ -438,11 +442,24 @@ static int64_t bq_query_escape(uint64_t cls, NSString *ident, BOOL group,
     // NOTE: container_object_get_sandbox_token is otherwise deliberately NOT
     // used as a fallback: before acquire runs it returns object+0x30 which is
     // not a token for fresh query results.
-    int64_t h = (tok && g.consume) ? g.consume(tok) : -5;
-    BQLog(@"strategy %@: cls=%llu ident=%@ part=%llu result=%p path=%@ token=%s consume=%lld",
-          label, cls, ident, part, res, path ?: @"(null)", tok ? "YES" : "NO", (long long)h);
+    int64_t h;
+    if (tokActivated) {
+        // acquire's success path calls container_object_sandbox_extension_
+        // activate UNCONDITIONALLY (the bool only picks a log string), and a
+        // sandbox token is single-use — consume()ing it again fails. The
+        // extension for the resolved target is already active in this
+        // process, so treat the escape as done and read through the symlink.
+        h = 0;
+        BQLog(@"strategy %@: cls=%llu ident=%@ part=%llu result=%p path=%@ token=YES(activated by acquire, consume skipped)",
+              label, cls, ident, part, res, path ?: @"(null)");
+    } else {
+        h = (tok && g.consume) ? g.consume(tok) : -5;
+        BQLog(@"strategy %@: cls=%llu ident=%@ part=%llu result=%p path=%@ token=%s consume=%lld",
+              label, cls, ident, part, res, path ?: @"(null)", tok ? "YES" : "NO", (long long)h);
+    }
     if (!res) bq_log_query_error(q, label);
     if (tokFromCopy) free(tok);
+    gEscapeSkipRelease = tokActivated;
     g.query_free(q);
     if (h >= 0 && outPath) *outPath = path;
     return h;
@@ -825,7 +842,14 @@ static NSString *bq_escape_error(int64_t h) {
 }
 
 void BQEndEscape(int64_t handle) {
-    if (handle >= 0 && g.release) g.release(handle);
+    // Extensions activated inside container_acquire_sandbox_extension have an
+    // unknown handle — releasing a guessed handle could drop a foreign
+    // extension. They live until process exit, which is fine for probes.
+    if (gEscapeSkipRelease) {
+        gEscapeSkipRelease = NO;
+    } else if (handle >= 0 && g.release) {
+        g.release(handle);
+    }
     if (gClass2SubpathLink.length) {
         unlink(gClass2SubpathLink.fileSystemRepresentation);
         gClass2SubpathLink = nil;
