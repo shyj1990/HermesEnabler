@@ -2680,6 +2680,10 @@ void BQRespring(void) {
 // probe only opens the cache file and closes it again.
 NSString *BQDiagnosticsReport(void) {
     NSMutableString *report = [NSMutableString string];
+    bq_load_mcm();
+    [report appendFormat:@"mcm loaded=%d create=%p token=%p domain=%p part=%p flags=%p\n",
+        g.h != NULL, (void *)g.create, (void *)g.copy_token,
+        (void *)g.set_domain, (void *)g.set_part, (void *)g.set_flags];
     char build[128] = {0};
     size_t buildLength = sizeof(build);
     sysctlbyname("kern.osversion", build, &buildLength, NULL, 0);
