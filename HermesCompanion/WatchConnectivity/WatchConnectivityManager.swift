@@ -33,6 +33,7 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
     @Published var backups: [BackupRecord] = []
     @Published var backupStatus = String(localized: "No Backups")
     @Published var lastVerificationMessage = ""
+    @Published var diagnosticsText = ""
 
     private var session: WCSession?
 
@@ -639,12 +640,22 @@ extension WatchConnectivityManager: WCSessionDelegate {
         _ session: WCSession,
         didReceive file: WCSessionFile
     ) {
-        print("[WC] Backup file received")
+        print("[WC] File received")
 
         // WCSession removes its temporary file after this delegate returns.
         do {
             let data = try Data(contentsOf: file.fileURL)
             let metadata = file.metadata
+            if metadata?["type"] as? String == "diagnosticsReport" {
+                // Research diagnostics from the watch's Diagnostics page — never
+                // a MobileGestalt backup, so it must not enter the backup store.
+                let text = String(data: data, encoding: .utf8) ?? ""
+                Task { @MainActor in
+                    self.diagnosticsText = text
+                    self.backupStatus = String(localized: "Diagnostics report received")
+                }
+                return
+            }
             Task { @MainActor in
                 do {
                     let record = try Self.storeBackup(data: data, metadata: metadata)
@@ -654,7 +665,7 @@ extension WatchConnectivityManager: WCSessionDelegate {
                 }
             }
         } catch {
-            print("[WC] Could not read transferred backup: \(error.localizedDescription)")
+            print("[WC] Could not read transferred file: \(error.localizedDescription)")
         }
     }
 
