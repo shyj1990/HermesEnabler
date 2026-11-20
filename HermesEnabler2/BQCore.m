@@ -37,6 +37,7 @@ static NSArray<NSString *> *gGroupIDs;
 static NSString *gEscapeGroupRoot;
 static int gTraversalState; // 0 unknown, 1 works, -1 unsupported
 static BOOL gClass2ParentEnabled;
+static BOOL gAcquireEnabled;
 static NSString *gClass2SubpathLink;
 static dispatch_queue_t gWorkQueue;
 
@@ -47,6 +48,15 @@ void BQSetClass2ParentEnabled(BOOL on) {
     [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"BQClass2ParentEnabled"];
     [[NSUserDefaults standardUserDefaults] synchronize];
     BQLog(@"class2-parent enabled=%d", on);
+}
+
+BOOL BQAcquireEnabled(void) { return gAcquireEnabled; }
+
+void BQSetAcquireEnabled(BOOL on) {
+    gAcquireEnabled = on;
+    [[NSUserDefaults standardUserDefaults] setBool:on forKey:@"BQAcquireEnabled"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    BQLog(@"acquire enabled=%d", on);
 }
 
 NSString *BQLogPath(void) {
@@ -341,6 +351,17 @@ BOOL BQCoreInit(void) {
         } else {
             [defs setBool:NO forKey:@"BQClass2ParentCrashGuard"];
         }
+        // Acquire is opt-in: on watchOS 11.4 a launch-time getter storm calls it
+        // for every strategy and the process died on open in the first build
+        // that shipped it. Only diagnostics probes request extensions now.
+        gAcquireEnabled = [defs boolForKey:@"BQAcquireEnabled"];
+        if (gAcquireEnabled && [defs boolForKey:@"BQAcquireCrashGuard"]) {
+            gAcquireEnabled = NO;
+            [defs setBool:NO forKey:@"BQAcquireEnabled"];
+            [defs setBool:NO forKey:@"BQAcquireCrashGuard"];
+            [defs synchronize];
+            BQLog(@"acquire disabled after a previous attempt did not finish (crashed inside container_acquire_sandbox_extension)");
+        }
         BQLog(@"=== BQEscape start | iOS %@ | bundle %@ ===",
               [WKInterfaceDevice currentDevice].systemVersion, [[NSBundle mainBundle] bundleIdentifier]);
         bq_load_mcm();
@@ -383,11 +404,19 @@ static int64_t bq_query_escape(uint64_t cls, NSString *ident, BOOL group,
         if (cp) path = [NSString stringWithUTF8String:cp];
     }
     char *tok = (res && g.copy_token) ? g.copy_token(res) : NULL;
-    if ((!tok || !*tok) && res && g.acquire) {
+    if ((!tok || !*tok) && res && g.acquire && gAcquireEnabled) {
         // Older containermanagerd builds do not attach a token to query
         // results; request one explicitly instead (the classic MCM path).
+        // Opt-in from Diagnostics: on watchOS 11.4 this call killed the
+        // process when invoked during the launch-time getter storm, so the
+        // launch path must never reach it.
+        NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
+        [defs setBool:YES forKey:@"BQAcquireCrashGuard"];
+        [defs synchronize];
         char *t = NULL;
         bool ok = g.acquire(res, false, &t);
+        [defs setBool:NO forKey:@"BQAcquireCrashGuard"];
+        [defs synchronize];
         if (ok && t && *t) tok = t;
         else BQLog(@"acquire_sandbox_extension: ok=%d t=%p", ok, (void *)t);
     }
@@ -2704,6 +2733,7 @@ NSString *BQDiagnosticsReport(void) {
         (void *)g.set_domain, (void *)g.set_part, (void *)g.set_flags];
     [report appendFormat:@"mcm acquire=%p activate=%p gettok=%p\n",
         (void *)g.acquire, (void *)g.activate, (void *)g.get_tok];
+    [report appendFormat:@"acquireEnabled=%d\n", gAcquireEnabled];
     char build[128] = {0};
     size_t buildLength = sizeof(build);
     sysctlbyname("kern.osversion", build, &buildLength, NULL, 0);
