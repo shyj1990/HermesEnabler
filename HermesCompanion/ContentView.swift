@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
 
 // MARK: - Content View
 
@@ -25,6 +26,27 @@ struct ContentView: View {
                     WatchDeviceCard(watchManager: watchManager)
                     WatchInstallationCard(watchManager: watchManager)
                     LatestBackupCard(watchManager: watchManager)
+
+                    if !watchManager.diagnosticsText.isEmpty {
+                        GroupBox {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Diagnostics Report")
+                                    .font(.headline)
+                                ScrollView {
+                                    Text(watchManager.diagnosticsText)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .textSelection(.enabled)
+                                }
+                                .frame(maxHeight: 260)
+                                Button {
+                                    UIPasteboard.general.string = watchManager.diagnosticsText
+                                } label: {
+                                    Label("Copy Report", systemImage: "doc.on.doc")
+                                }
+                            }
+                        }
+                    }
 
                     actionButtons
                 }
