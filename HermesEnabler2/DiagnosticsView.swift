@@ -42,7 +42,7 @@ struct DiagnosticsView: View {
 
     private func runProbes() {
         BQCoreInit()
-        var full = BQDiagnosticsReport()
+        var full: String = BQDiagnosticsReport() as String? ?? "No report."
         if let logPath = BQLogPath() as String?,
            let log = try? String(contentsOfFile: logPath, encoding: .utf8),
            !log.isEmpty {
