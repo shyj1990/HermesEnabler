@@ -31,7 +31,7 @@ struct DiagnosticsView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                Text("Expected lines: build/os version, layout (1 = this build is in the offset table), read (escape+read works), write (opening the cache for writing works — this is the go/no-go signal for a system-level unlock).")
+                Text("Expected lines: build/os version, groups (0 = the signed app has no App Group entitlement — check the 'app group entitlement' line in the log tail), read (escape+read works), write (the go/no-go signal for a system-level unlock). If the backup alert appears, also try Settings → Class-2 fallback (experimental).")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -42,7 +42,18 @@ struct DiagnosticsView: View {
 
     private func runProbes() {
         BQCoreInit()
-        report = BQDiagnosticsReport()
+        var full = BQDiagnosticsReport()
+        if let logPath = BQLogPath() as String?,
+           let log = try? String(contentsOfFile: logPath, encoding: .utf8),
+           !log.isEmpty {
+            // The escape chain logs every strategy it tries; the tail tells us
+            // exactly which layers failed and with which codes.
+            let tail = String(log.suffix(4000))
+            full += "\n--- bqtool.log tail ---\n" + tail
+        } else {
+            full += "\n--- bqtool.log: empty or missing ---"
+        }
+        report = full
     }
 
     private func sendReport() {
