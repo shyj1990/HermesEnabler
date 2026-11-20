@@ -1,0 +1,53 @@
+name: Extract MCM dylib symbols
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract:
+    strategy:
+      matrix:
+        runner: [macos-14, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Locate dyld shared cache
+        run: |
+          set -euo pipefail
+          find /System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld -name "dyld_shared_cache*" 2>/dev/null || true
+          CACHE=$(find /System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld -name "dyld_shared_cache_arm64e" 2>/dev/null | head -1)
+          [ -n "$CACHE" ] || CACHE=$(find /System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld -name "dyld_shared_cache_*" 2>/dev/null | grep -v "^.dyld$" | head -1)
+          echo "CACHE=$CACHE" >> "$GITHUB_ENV"
+          sw_vers
+
+      - name: Install ipsw CLI
+        run: |
+          set -euo pipefail
+          REL=$(curl -sL https://api.github.com/repos/blacktop/ipsw/releases/latest | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])")
+          echo "ipsw version: $REL"
+          curl -sL -o ipsw.zip "https://github.com/blacktop/ipsw/releases/download/${REL}/ipsw_${REL}_macos_arm64.zip"
+          unzip -o ipsw.zip -d /usr/local/bin ipsw
+          /usr/local/bin/ipsw version
+
+      - name: Extract libsystem_containermanager.dylib from cache
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          /usr/local/bin/ipsw dyld extract "$CACHE" libsystem_containermanager.dylib --output out/ || \
+          /usr/local/bin/ipsw dyld extract "$CACHE" out/libsystem_containermanager.dylib || true
+          find out -type f -exec ls -la {} \;
+
+      - name: List exported symbols
+        run: |
+          set -euo pipefail
+          DYLIB=$(find out -name "libsystem_containermanager*" -type f | head -1)
+          if [ -z "$DYLIB" ]; then echo "dylib not extracted"; exit 1; fi
+          echo "=== exported symbols ==="
+          nm -gU "$DYLIB" | tee out/symbols.txt
+          echo "=== disassembly ==="
+          objdump -d "$DYLIB" > out/disasm.txt || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcm-dylib-${{ matrix.runner }}
+          path: out/
