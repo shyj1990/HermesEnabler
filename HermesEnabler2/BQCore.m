@@ -38,6 +38,7 @@ static NSString *gEscapeGroupRoot;
 static int gTraversalState; // 0 unknown, 1 works, -1 unsupported
 static BOOL gClass2ParentEnabled;
 static BOOL gAcquireEnabled;
+static BOOL gAcquireAttempted;
 static NSString *gClass2SubpathLink;
 static dispatch_queue_t gWorkQueue;
 
@@ -404,31 +405,39 @@ static int64_t bq_query_escape(uint64_t cls, NSString *ident, BOOL group,
         if (cp) path = [NSString stringWithUTF8String:cp];
     }
     char *tok = (res && g.copy_token) ? g.copy_token(res) : NULL;
-    if ((!tok || !*tok) && res && g.acquire && gAcquireEnabled) {
+    BOOL tokFromCopy = (tok != NULL);
+    if ((!tok || !*tok) && res && g.acquire && gAcquireEnabled && !gAcquireAttempted) {
         // Older containermanagerd builds do not attach a token to query
         // results; request one explicitly instead (the classic MCM path).
-        // Opt-in from Diagnostics: on watchOS 11.4 this call killed the
-        // process when invoked during the launch-time getter storm, so the
-        // launch path must never reach it.
+        // Opt-in from Diagnostics. Hardened after the first build died:
+        // - at most ONE attempt per process run,
+        // - synchronous log lines immediately before/after the call (BQLog
+        //   flushes to disk, so the file shows whether the call returned),
+        // - the returned token is never free()d — ownership of the private
+        //   API's out parameter is unknown and freeing foreign memory aborts.
+        gAcquireAttempted = YES;
         NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
         [defs setBool:YES forKey:@"BQAcquireCrashGuard"];
         [defs synchronize];
         char *t = NULL;
+        BQLog(@"acquire: calling container_acquire_sandbox_extension (cls=%llu ident=%@)", cls, ident);
         bool ok = g.acquire(res, false, &t);
+        BQLog(@"acquire: returned ok=%d t=%p len=%zu", ok, (void *)t, t ? strlen(t) : 0);
         [defs setBool:NO forKey:@"BQAcquireCrashGuard"];
         [defs synchronize];
-        if (ok && t && *t) tok = t;
-        else BQLog(@"acquire_sandbox_extension: ok=%d t=%p", ok, (void *)t);
+        if (ok && t && *t) {
+            tok = t; // intentionally leaked; only used for consume below
+        }
     }
-    if ((!tok || !*tok) && res && g.get_tok) {
-        char *t = g.get_tok(res);
-        if (t && *t) tok = t;
-    }
+    // NOTE: container_object_get_sandbox_token is deliberately NOT used as a
+    // fallback. Its implementation returns an inner object pointer (not a C
+    // string) when no token array exists, so treating its result as a token
+    // fed an object pointer to consume()/free() on watchOS 11.4.
     int64_t h = (tok && g.consume) ? g.consume(tok) : -5;
     BQLog(@"strategy %@: cls=%llu ident=%@ part=%llu result=%p path=%@ token=%s consume=%lld",
           label, cls, ident, part, res, path ?: @"(null)", tok ? "YES" : "NO", (long long)h);
     if (!res) bq_log_query_error(q, label);
-    if (tok) free(tok);
+    if (tokFromCopy) free(tok);
     g.query_free(q);
     if (h >= 0 && outPath) *outPath = path;
     return h;
