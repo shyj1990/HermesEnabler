@@ -89,6 +89,14 @@ struct BackupView: View {
             Section("Status") { Text(LocalizedStringKey(model.message))
                 .font(.footnote)
                 .foregroundStyle(.secondary) }
+
+            // Reachable even before any backup exists: the escape-chain
+            // diagnostics must be usable when backup creation keeps failing.
+            Section("Research") {
+                NavigationLink { DiagnosticsView() } label: {
+                    Label("Diagnostics", systemImage: "stethoscope")
+                }
+            }
         }
         .navigationTitle("MG Backups")
         .onAppear {
