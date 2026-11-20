@@ -1,0 +1,35 @@
+name: Build HermesEnabler unsigned IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: xcode-27
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 27
+        run: |
+          ls /Applications | grep -i xcode || true
+          if [ -d "/Applications/Xcode_27.3.app" ]; then
+            sudo xcode-select -s "/Applications/Xcode_27.3.app/Contents/Developer"
+          else
+            for d in /Applications/Xcode_27*.app /Applications/Xcode.app; do
+              if [ -d "$d" ]; then sudo xcode-select -s "$d/Contents/Developer"; break; fi
+            done
+          fi
+          xcodebuild -version
+
+      - name: Build unsigned IPA (iPhone companion + embedded Watch app)
+        run: |
+          set -euo pipefail
+          ./scripts/create_ipa.sh --bundle-id com.example.HermesEnabler --output build/ipa/HermesEnabler.ipa
+          ls -la build/ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HermesEnabler-diagnostic-ipa
+          path: build/ipa/HermesEnabler.ipa
