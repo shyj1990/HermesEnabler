@@ -20,10 +20,8 @@ struct DiagnosticsView: View {
                 Text(report)
                     .font(.system(size: 13, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Button("Run probes") {
+                Button("Run probes & send report") {
                     runProbes()
-                }
-                Button("Send report to iPhone") {
                     sendReport()
                 }
                 if !sent.isEmpty {
