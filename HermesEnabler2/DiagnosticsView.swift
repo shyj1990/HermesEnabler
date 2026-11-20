@@ -68,6 +68,15 @@ struct DiagnosticsView: View {
         if let logPath = BQLogPath() as String?,
            let log = try? String(contentsOfFile: logPath, encoding: .utf8),
            !log.isEmpty {
+            // The acquire smoke-test lines sit at the very start of the log,
+            // outside the tail window — pull every matching line explicitly.
+            let acquireLines = log.components(separatedBy: "\n")
+                .filter { $0.contains("acquire") }
+            if !acquireLines.isEmpty {
+                full += "\n--- acquire lines ---\n" + acquireLines.joined(separator: "\n")
+            } else {
+                full += "\n--- acquire lines: none found in bqtool.log ---"
+            }
             // The escape chain logs every strategy it tries; the tail tells us
             // exactly which layers failed and with which codes.
             let tail = String(log.suffix(4000))
