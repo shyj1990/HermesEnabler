@@ -2673,3 +2673,51 @@ void BQRespring(void) {
         });
     });
 }
+
+// ---- diagnostics (watchOS 11 port research) --------------------------------
+// Builds a compact, screenshot-friendly report of every capability the
+// MobileGestalt write path depends on. Never modifies anything: the write
+// probe only opens the cache file and closes it again.
+NSString *BQDiagnosticsReport(void) {
+    NSMutableString *report = [NSMutableString string];
+    char build[128] = {0};
+    size_t buildLength = sizeof(build);
+    sysctlbyname("kern.osversion", build, &buildLength, NULL, 0);
+    NSOperatingSystemVersion osv = NSProcessInfo.processInfo.operatingSystemVersion;
+    [report appendFormat:@"build=%s os=%ld.%ld.%ld\n",
+        build, (long)osv.majorVersion, (long)osv.minorVersion, (long)osv.patchVersion];
+    [report appendFormat:@"layout=%d groups=%lu\n",
+        bq_currentLayout() != NULL ? 1 : 0, (unsigned long)BQGroupIDs().count];
+
+    NSString *err = nil;
+    NSMutableDictionary *plist = BQLoadGestalt(&err);
+    if (plist != nil) {
+        NSData *data = plist[@"CacheData"] ?: [NSData data];
+        id uuid = plist[@"CacheUUID"];
+        id extra = plist[@"CacheExtra"];
+        [report appendFormat:@"read=1 len=%lu uuid=%@\n",
+            (unsigned long)data.length,
+            [uuid isKindOfClass:[NSString class]] ? uuid : @"nil"];
+        [report appendFormat:@"extra=%lu\n",
+            (unsigned long)([extra isKindOfClass:[NSDictionary class]] ? [extra count] : 0)];
+    } else {
+        [report appendFormat:@"read=0 err=%@\n", err ?: @"unknown"];
+    }
+
+    NSString *link = nil;
+    int64_t h = BQEscape(kMGCaches, &link);
+    if (h < 0) {
+        [report appendFormat:@"write=0 escape=%lld\n", h];
+        return report;
+    }
+    NSString *path = [link stringByAppendingPathComponent:@"com.apple.MobileGestalt.plist"];
+    int fd = open(path.fileSystemRepresentation, O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd >= 0) {
+        close(fd);
+        [report appendString:@"write=1\n"];
+    } else {
+        [report appendFormat:@"write=0 errno=%d\n", errno];
+    }
+    BQEndEscape(h);
+    return report;
+}
