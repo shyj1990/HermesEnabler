@@ -416,17 +416,22 @@ static int64_t bq_query_escape(uint64_t cls, NSString *ident, BOOL group,
         [defs setBool:YES forKey:@"BQAcquireCrashGuard"];
         [defs synchronize];
         char *t = NULL;
-        BQLog(@"acquire: calling container_acquire_sandbox_extension (cls=%llu ident=%@)", cls, ident);
-        bool ok = g.acquire(res, false, &t);
-        // Disasm: the out parameter carries an ERROR CODE (wrapper stores
-        // [struct+0x18] to *out unless it equals 1). On 22T251 ok=1 and
-        // t=NULL. Never dereference or free it.
+        // Disasm: acquire's bool is forwarded to container_object_sandbox_
+        // extension_activate, which passes it as the forWrite argument of
+        // container_sandbox_extension_consume. false = read-only extension —
+        // exactly what the 11.4 report showed (read=1, write EPERM). Try a
+        // read-write extension first; fall back to read-only so the proven
+        // read path keeps working if the daemon refuses write tokens.
+        BQLog(@"acquire: calling container_acquire_sandbox_extension (cls=%llu ident=%@ forWrite=1)", cls, ident);
+        bool ok = g.acquire(res, true, &t);
+        // The out parameter carries an ERROR CODE (wrapper stores
+        // [struct+0x18] to *out unless it equals 1). Never dereference it.
         BQLog(@"acquire: returned ok=%d t=%p", ok, (void *)t);
         if (ok) {
-            // container_object_set_sandbox_token (called inside acquire on
-            // success) strndups the daemon-issued token into the container
-            // object at object+0x30; container_object_get_sandbox_token's
-            // fallback path returns exactly that pointer. Read it back.
+            // On success container_object_set_sandbox_token strndups the
+            // daemon-issued token into the container object at object+0x30;
+            // container_object_get_sandbox_token's fallback path returns
+            // exactly that pointer. Read it back.
             char *t2 = g.get_tok ? g.get_tok(res) : NULL;
             BQLog(@"acquire: get_sandbox_token -> %p", (void *)t2);
             size_t t2len = t2 ? strnlen(t2, 4096) : 0;
@@ -434,6 +439,21 @@ static int64_t bq_query_escape(uint64_t cls, NSString *ident, BOOL group,
             if (t2len > 16) {
                 tok = t2; // object-owned; never free()
                 tokActivated = YES;
+            }
+        }
+        if (!tokActivated) {
+            // Read-write refused (or no token issued) — retry read-only.
+            BQLog(@"acquire: retry read-only");
+            ok = g.acquire(res, false, &t);
+            BQLog(@"acquire: retry returned ok=%d t=%p", ok, (void *)t);
+            if (ok) {
+                char *t2 = g.get_tok ? g.get_tok(res) : NULL;
+                BQLog(@"acquire: retry get_sandbox_token -> %p", (void *)t2);
+                size_t t2len = t2 ? strnlen(t2, 4096) : 0;
+                if (t2len > 16) {
+                    tok = t2;
+                    tokActivated = YES;
+                }
             }
         }
         [defs setBool:NO forKey:@"BQAcquireCrashGuard"];
