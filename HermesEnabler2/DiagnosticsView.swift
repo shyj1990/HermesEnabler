@@ -9,6 +9,7 @@ struct DiagnosticsView: View {
     @State private var report: String = "Not run yet."
     @State private var sent: String = ""
     @State private var class2Parent: Bool = BQClass2ParentEnabled()
+    @State private var acquire: Bool = BQAcquireEnabled()
 
     var body: some View {
         ScrollView {
@@ -27,6 +28,17 @@ struct DiagnosticsView: View {
                 ))
                 .font(.footnote)
                 Text("Experimental escape that needs no MCM-issued token for foreign containers. Some builds kill the process while moving Library — if that happens, the crash guard disables it automatically.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Toggle("Acquire extensions (older MCM)", isOn: Binding(
+                    get: { acquire },
+                    set: { newValue in
+                        acquire = newValue
+                        BQSetAcquireEnabled(newValue)
+                    }
+                ))
+                .font(.footnote)
+                Text("Calls container_acquire_sandbox_extension on every probe. OFF by default: calling it during the launch-time getter pass killed the app on watchOS 11.4. When ON, the first Run probes after a crash may disable it automatically.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(report)
