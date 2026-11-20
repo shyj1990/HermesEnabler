@@ -38,7 +38,7 @@ struct DiagnosticsView: View {
                     }
                 ))
                 .font(.footnote)
-                Text("Calls container_acquire_sandbox_extension on every probe. OFF by default: calling it during the launch-time getter pass killed the app on watchOS 11.4. When ON, the first Run probes after a crash may disable it automatically.")
+                Text("Calls container_acquire_sandbox_extension once per run (the first strategy only) and logs the call and its return to bqtool.log. OFF by default: the unhardened version died on watchOS 11.4. If the app dies during probes, reopen it — the crash guard disables the toggle automatically, and the next report's log tail shows how far the call got.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(report)
