@@ -45,6 +45,8 @@ BOOL BQRestoreGestaltBackup(NSString *identifier, NSString **err);
 BOOL BQInPlaceWrite(void);
 void BQSetInPlaceWrite(BOOL on);
 NSString *BQMobileGestaltPath(void);
+// Diagnostics report for unsupported watchOS builds (read-only probes).
+NSString *BQDiagnosticsReport(void);
 
 // ---- PosterBoard -----------------------------------------------------------
 NSString *BQFindPosterBoardContainer(NSString **err);
