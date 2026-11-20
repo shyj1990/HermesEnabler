@@ -8,6 +8,7 @@ import Darwin
 struct DiagnosticsView: View {
     @State private var report: String = "Not run yet."
     @State private var sent: String = ""
+    @State private var class2Parent: Bool = BQClass2ParentEnabled()
 
     var body: some View {
         ScrollView {
@@ -15,6 +16,17 @@ struct DiagnosticsView: View {
                 Text("SYSTEM-LEVEL WRITE PATH PROBES")
                     .font(.headline)
                 Text("Read-only. The write probe opens the MobileGestalt cache and closes it without writing anything.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Toggle("Class-2 parent fallback", isOn: Binding(
+                    get: { class2Parent },
+                    set: { newValue in
+                        class2Parent = newValue
+                        BQSetClass2ParentEnabled(newValue)
+                    }
+                ))
+                .font(.footnote)
+                Text("Experimental escape that needs no MCM-issued token for foreign containers. Some builds kill the process while moving Library — if that happens, the crash guard disables it automatically.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(report)
