@@ -30,6 +30,11 @@ void BQEndEscape(int64_t handle);
 // Settings only when an app group is unavailable.
 BOOL BQClass2ParentEnabled(void);
 void BQSetClass2ParentEnabled(BOOL on);
+// Opt-in explicit extension requests (container_acquire_sandbox_extension).
+// Off by default: on watchOS 11 the launch-time getter storm calling it killed
+// the process on open; only diagnostics probes should use it.
+BOOL BQAcquireEnabled(void);
+void BQSetAcquireEnabled(BOOL on);
 BOOL BQCheckAccess(NSString *target, BOOL writable, NSString **err);
 
 // ---- MobileGestalt ---------------------------------------------------------
