@@ -1,0 +1,77 @@
+import SwiftUI
+import WatchConnectivity
+import Darwin
+
+/// WatchOS 11.x port research: runs read-only probes against the
+/// MobileGestalt access path and shows the results. The write probe only
+/// opens the cache file and closes it — nothing is ever modified.
+struct DiagnosticsView: View {
+    @State private var report: String = "Not run yet."
+    @State private var sent: String = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("SYSTEM-LEVEL WRITE PATH PROBES")
+                    .font(.headline)
+                Text("Read-only. The write probe opens the MobileGestalt cache and closes it without writing anything.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(report)
+                    .font(.system(size: 13, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Run probes") {
+                    runProbes()
+                }
+                Button("Send report to iPhone") {
+                    sendReport()
+                }
+                if !sent.isEmpty {
+                    Text(sent)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Text("Expected lines: build/os version, layout (1 = this build is in the offset table), read (escape+read works), write (opening the cache for writing works — this is the go/no-go signal for a system-level unlock).")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(8)
+        }
+        .navigationTitle("Diagnostics")
+    }
+
+    private func runProbes() {
+        BQCoreInit()
+        report = BQDiagnosticsReport()
+    }
+
+    private func sendReport() {
+        guard WCSession.isSupported() else {
+            sent = "WCSession unsupported"
+            return
+        }
+        let session = WCSession.default
+        session.activate()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clocky-hermes-diagnostics.txt")
+        do {
+            try report.write(to: url, atomically: true, encoding: .utf8)
+            session.transferFile(url, metadata: [
+                "type": "diagnosticsReport",
+                "build": systemBuild() ?? "unknown"
+            ])
+            sent = "Report queued for transfer."
+        } catch {
+            sent = "Write failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func systemBuild() -> String? {
+        var size = 0
+        sysctlbyname("kern.osversion", nil, &size, nil, 0)
+        guard size > 0 else { return nil }
+        var value = [CChar](repeating: 0, count: size)
+        sysctlbyname("kern.osversion", &value, &size, nil, 0)
+        return String(cString: value)
+    }
+}
