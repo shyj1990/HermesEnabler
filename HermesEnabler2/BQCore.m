@@ -409,12 +409,7 @@ static int64_t bq_query_escape(uint64_t cls, NSString *ident, BOOL group,
     if ((!tok || !*tok) && res && g.acquire && gAcquireEnabled && !gAcquireAttempted) {
         // Older containermanagerd builds do not attach a token to query
         // results; request one explicitly instead (the classic MCM path).
-        // Opt-in from Diagnostics. Hardened after the first build died:
-        // - at most ONE attempt per process run,
-        // - synchronous log lines immediately before/after the call (BQLog
-        //   flushes to disk, so the file shows whether the call returned),
-        // - the returned token is never free()d — ownership of the private
-        //   API's out parameter is unknown and freeing foreign memory aborts.
+        // Opt-in from Diagnostics. One attempt per process run.
         gAcquireAttempted = YES;
         NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
         [defs setBool:YES forKey:@"BQAcquireCrashGuard"];
@@ -422,17 +417,27 @@ static int64_t bq_query_escape(uint64_t cls, NSString *ident, BOOL group,
         char *t = NULL;
         BQLog(@"acquire: calling container_acquire_sandbox_extension (cls=%llu ident=%@)", cls, ident);
         bool ok = g.acquire(res, false, &t);
-        BQLog(@"acquire: returned ok=%d t=%p len=%zu", ok, (void *)t, t ? strlen(t) : 0);
+        // Disasm: the out parameter carries an ERROR CODE (wrapper stores
+        // [struct+0x18] to *out unless it equals 1). On 22T251 ok=1 and
+        // t=NULL. Never dereference or free it.
+        BQLog(@"acquire: returned ok=%d t=%p", ok, (void *)t);
+        if (ok) {
+            // container_object_set_sandbox_token (called inside acquire on
+            // success) strndups the daemon-issued token into the container
+            // object at object+0x30; container_object_get_sandbox_token's
+            // fallback path returns exactly that pointer. Read it back.
+            char *t2 = g.get_tok ? g.get_tok(res) : NULL;
+            BQLog(@"acquire: get_sandbox_token -> %p", (void *)t2);
+            size_t t2len = t2 ? strnlen(t2, 4096) : 0;
+            if (t2) BQLog(@"acquire: token len=%zu", t2len);
+            if (t2len > 16) tok = t2; // object-owned; never free()
+        }
         [defs setBool:NO forKey:@"BQAcquireCrashGuard"];
         [defs synchronize];
-        if (ok && t && *t) {
-            tok = t; // intentionally leaked; only used for consume below
-        }
     }
-    // NOTE: container_object_get_sandbox_token is deliberately NOT used as a
-    // fallback. Its implementation returns an inner object pointer (not a C
-    // string) when no token array exists, so treating its result as a token
-    // fed an object pointer to consume()/free() on watchOS 11.4.
+    // NOTE: container_object_get_sandbox_token is otherwise deliberately NOT
+    // used as a fallback: before acquire runs it returns object+0x30 which is
+    // not a token for fresh query results.
     int64_t h = (tok && g.consume) ? g.consume(tok) : -5;
     BQLog(@"strategy %@: cls=%llu ident=%@ part=%llu result=%p path=%@ token=%s consume=%lld",
           label, cls, ident, part, res, path ?: @"(null)", tok ? "YES" : "NO", (long long)h);
