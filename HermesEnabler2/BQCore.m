@@ -2779,6 +2779,98 @@ void BQRespring(void) {
     });
 }
 
+// ---- write matrix -----------------------------------------------------------
+// The daemon bakes permissions into the token at issue time; the acquire bool
+// is client-side bookkeeping only (disasm of container_sandbox_extension_
+// consume: it updates a local cache, the kernel rights come from
+// sandbox_extension_consume(token)). The query flags are the remaining lever
+// that may change what the daemon issues. Try a matrix of flag values against
+// the gestaltcache target and report which (if any) yields a writable token.
+static NSString *bq_probe_write_at(NSString *dir) {
+    if (!dir.length) return @"(no path)";
+    NSString *test = [dir stringByAppendingPathComponent:@".bq_wtest"];
+    int fd = open(test.fileSystemRepresentation, O_CREAT | O_WRONLY | O_EXCL | O_NOFOLLOW, 0644);
+    if (fd >= 0) {
+        close(fd);
+        unlink(test.fileSystemRepresentation);
+        return @"newfile=OK";
+    }
+    int e1 = errno;
+    NSString *plist = [dir stringByAppendingPathComponent:@"com.apple.MobileGestalt.plist"];
+    fd = open(plist.fileSystemRepresentation, O_WRONLY | O_NOFOLLOW);
+    if (fd >= 0) {
+        close(fd);
+        return [NSString stringWithFormat:@"newfile=%d plistopen=OK", e1];
+    }
+    return [NSString stringWithFormat:@"newfile=%d plistopen=%d", e1, errno];
+}
+
+static NSString *BQWriteMatrixReport(void) {
+    NSMutableString *out = [NSMutableString string];
+    NSArray<NSString *> *ids = BQGroupIDs();
+    if (!ids.count) return @"\n--- write matrix: no app group ---\n";
+    NSString *gid = ids.firstObject;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSURL *u = [fm containerURLForSecurityApplicationGroupIdentifier:gid];
+    NSString *groot = u.path;
+    if (!groot.length) return @"\n--- write matrix: no app group path ---\n";
+    NSString *lib = [groot stringByAppendingPathComponent:@"Library"];
+    NSString *caches = [lib stringByAppendingPathComponent:@"Caches"];
+    NSString *bak = [lib stringByAppendingPathComponent:@"Caches.bqtool"];
+    [fm createDirectoryAtPath:lib withIntermediateDirectories:YES attributes:nil error:nil];
+    bq_recover(lib, [groot stringByAppendingPathComponent:@"Library.bq_orig"]);
+    bq_recover(caches, bak);
+    if (![fm fileExistsAtPath:caches]) {
+        [fm createDirectoryAtPath:caches withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    if (!bq_swap_path(caches, kMGCaches, bak)) {
+        bq_restore_path(caches, bak);
+        return @"\n--- write matrix: symlink setup failed ---\n";
+    }
+
+    BOOL savedAcquire = gAcquireEnabled;
+    BOOL savedClass2 = gClass2ParentEnabled;
+    gAcquireEnabled = YES; // matrix is opt-in; issuing tokens is the point
+    gClass2ParentEnabled = NO;
+
+    static const uint64_t flagVariants[] = {
+        0x8100000000ULL, 0x8000000000ULL, 0x0800000000ULL,
+        0x8300000000ULL, 0x0100000000ULL, 0x0000000000ULL,
+    };
+    [out appendString:@"\n--- write matrix (class7 symlink) ---\n"];
+    for (size_t i = 0; i < sizeof(flagVariants) / sizeof(flagVariants[0]); i++) {
+        uint64_t f = flagVariants[i];
+        NSString *link = nil;
+        int64_t h = bq_query_escape(7, gid, YES, 3, @"", f,
+            [NSString stringWithFormat:@"matrix-cls7-%llx", (unsigned long long)f], &link);
+        if (h < 0) {
+            [out appendFormat:@"F=%llx: escape=%lld\n", (unsigned long long)f, (long long)h];
+        } else {
+            [out appendFormat:@"F=%llx: %@\n", (unsigned long long)f, bq_probe_write_at(caches)];
+            BQEndEscape(h);
+        }
+    }
+
+    [out appendString:@"--- write matrix (class13 direct) ---\n"];
+    {
+        NSString *dir = nil;
+        int64_t h = bq_query_escape(13, kMGGroup, YES, 3, @"", 0x8100000000ULL,
+                                    @"matrix-cls13", &dir);
+        if (h < 0) {
+            [out appendFormat:@"cls13: escape=%lld\n", (long long)h];
+        } else {
+            NSString *c13 = [dir ?: @"" stringByAppendingPathComponent:@"Library/Caches"];
+            [out appendFormat:@"cls13: path=%@ %@\n", dir ?: @"(null)", bq_probe_write_at(c13)];
+            BQEndEscape(h);
+        }
+    }
+
+    gClass2ParentEnabled = savedClass2;
+    gAcquireEnabled = savedAcquire;
+    bq_restore_path(caches, bak);
+    return out;
+}
+
 // ---- diagnostics (watchOS 11 port research) --------------------------------
 // Builds a compact, screenshot-friendly report of every capability the
 // MobileGestalt write path depends on. Never modifies anything: the write
@@ -2831,5 +2923,6 @@ NSString *BQDiagnosticsReport(void) {
         [report appendFormat:@"write=0 errno=%d\n", errno];
     }
     BQEndEscape(h);
+    [report appendString:BQWriteMatrixReport()];
     return report;
 }
